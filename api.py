@@ -1,151 +1,119 @@
-from datetime import timedelta, datetime
+import aiohttp
+import asyncio
 
-import creds
-import ta
-from ta import volatility, trend, momentum
-import pandas as pd
-from pandas import DataFrame
-import matplotlib.pyplot as plt
-import mplfinance as mpf
-
-from tinkoff.invest.sandbox.client import SandboxClient
-from tinkoff.invest import MoneyValue, Client, OrderDirection, OrderType, CandleInterval
-from tinkoff.invest.services import InstrumentsService
-
-from IPython.core.interactiveshell import InteractiveShell
-InteractiveShell.ast_node_interactivity = "all"
+base_url = 'http://localhost:8000'
 
 
-def cast_money(v):
-    return v.units + v.nano*10**-9
+async def create_user(external_id, name):
+    url = f'{base_url}/users/create/'
+    data = {'external_id': external_id, 'name': name}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=data) as response:
+            try:
+                response.raise_for_status()
+                json_data = await response.json()
+                return json_data
+            except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as e:
+                print(f'Error during create_user request: {e}')
+                return None
 
 
-def get_all_events():
-    with SandboxClient(creds.sandbox) as client:
-        instruments = client.instruments
-        active = []
-        for method in ['shares', 'bonds', 'etfs']:
-            for item in getattr(instruments, method)().instruments:
-                active.append({
-                    'name': item.name,
-                    'ticker': item.ticker,
-                    'figi': item.figi,
-                    'currency': item.currency,
-                    'trading status': item.trading_status,
-                    'sector': item.sector
-                    })
+async def get_user(external_id):
+    url = f'{base_url}/users/get/?query={external_id}'
 
-    return active
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            try:
+                response.raise_for_status()
+                json_data = await response.json()
+                return json_data
+            except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as e:
+                print(f'Error during get_user request: {e}')
+                return None
 
 
-def search_event(t):
-    df = pd.DataFrame(get_all_events())
-    df = df[df['ticker'] == t]
-    if df.empty:
-        print("404")
-        return
-    return df
+async def delete_user(external_id):
+    url = f'{base_url}/users/delete/?external_id={external_id}'
+
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(url) as response:
+            try:
+                response.raise_for_status()
+                return True
+            except aiohttp.ClientResponseError as e:
+                print(f'Error during delete_user request: {e}')
+                return False
 
 
-def candles(figi):
-    with SandboxClient(creds.sandbox) as cl:
-        r = cl.market_data.get_candles(
-            figi=figi,
-            from_=datetime.utcnow() - timedelta(days=120),
-            to=datetime.utcnow(),
-            interval=CandleInterval.CANDLE_INTERVAL_DAY # см. utils.get_all_candles
-        )
-    return r
+async def get_all_users():
+    url = f'{base_url}/users/all/'
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                json_data = await response.json()
+                return json_data
+            else:
+                return {'error': 'Failed to get all users.'}
 
 
-def create_df(candles):
-    df = DataFrame([{
-        'time': c.time,
-        'volume': c.volume,
-        'open': cast_money(c.open),
-        'close': cast_money(c.close),
-        'high': cast_money(c.high),
-        'low': cast_money(c.low),
-    } for c in candles])
-    return df
+async def search_instrument(query):
+    url = f'{base_url}/instruments/search/?query={query}'
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            try:
+                response.raise_for_status()
+                json_data = await response.json()
+                return json_data
+            except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as e:
+                print(f'Error during search_instrument request: {e}')
+                return None
 
 
-def table(ticker):
-    print(ticker)
-    df = create_df(candles(search_event(ticker)['figi'].values[0]).candles)
-    df = ema(df)
-    df = macd_12_26_9(df)
-    return [df, search_event(ticker)]
+async def get_instrument(ticker):
+    url = f'{base_url}/instruments/get/?query={ticker}'
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            try:
+                response.raise_for_status()
+                json_data = await response.json()
+                return json_data
+            except (aiohttp.ClientResponseError, aiohttp.ContentTypeError) as e:
+                print(f'Error during get_instrument request: {e}')
+                return None
 
 
-def graf(df):
-    event = df[1].iloc[0]
-    df = df[0]
+async def get_all_instruments():
+    url = f'{base_url}/instruments/all/'
 
-    df.set_index('time', inplace=True)  # Установка столбца 'time' в качестве индекса
-
-    exp12 = df['close'].ewm(span=12, adjust=False).mean()
-    exp26 = df['close'].ewm(span=26, adjust=False).mean()
-    macd = exp12 - exp26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    histogram = macd - signal
-
-    fb_12up = dict(y1=exp12.values, y2=exp26.values, where=exp12 > exp26, color="#93c47d", alpha=0.6, interpolate=True)
-    fb_12dn = dict(y1=exp12.values, y2=exp26.values, where=exp12 < exp26, color="#e06666", alpha=0.6, interpolate=True)
-    fb_exp12 = [fb_12up, fb_12dn]
-
-    fb_macd_up = dict(y1=macd.values, y2=signal.values, where=signal < macd, color="#93c47d", alpha=0.6,
-                      interpolate=True)
-    fb_macd_dn = dict(y1=macd.values, y2=signal.values, where=signal > macd, color="#e06666", alpha=0.6,
-                      interpolate=True)
-    fb_macd_up['panel'] = 1
-    fb_macd_dn['panel'] = 1
-
-    fb_macd = [fb_macd_up, fb_macd_dn]
-
-    apds = [mpf.make_addplot(exp12, color='lime'),
-            mpf.make_addplot(exp26, color='c'),
-            mpf.make_addplot(histogram, type='bar', width=0.7, panel=1,
-                             color='dimgray', alpha=0.65, secondary_y=True),
-            mpf.make_addplot(macd, panel=1, color='fuchsia', secondary_y=False),
-            mpf.make_addplot(signal, panel=1, color='b', secondary_y=False)  # ,fill_between=fb_macd),
-            ]
-
-    s = mpf.make_mpf_style(base_mpf_style='blueskies', facecolor='aliceblue', rc={'figure.facecolor':'lightcyan'})
-    last_close = df['close'].iloc[-1]
-
-    save = dict(fname='tsave300.png', dpi=300, pad_inches=0.25)
-    save2 = dict(fname='tsave3002.png', dpi=300, pad_inches=0.25)
-    mpf.plot(df, type='candle', addplot=apds, figscale=1.6, figratio=(1, 1), title='\n\nMACD',
-             style=s, volume=True, volume_panel=2, panel_ratios=(3, 6, 1), tight_layout=True,
-             fill_between=fb_macd + fb_exp12, savefig=save)
-    s = mpf.make_mpf_style(base_mpf_style='mike', rc={'figure.facecolor': 'lightgray'})
-
-    mpf.plot(df, type='candle', addplot=apds, figscale=1.1, figratio=(1, 1), title=event['name'], tight_layout=True,
-             style=s, volume=True, volume_panel=2, panel_ratios=(4, 3, 1), savefig=save2)
-    mpf.show()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                json_data = await response.json()
+                return json_data
+            else:
+                return {'error': 'Failed to get all instruments.'}
 
 
-def macd_12_26_9(df):
-    df['ma_fast'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ma_slow'] = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = df['ma_fast'] - df['ma_slow']
-    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    return df
+async def main():
+    # Удаление пользователя
+    create_user_result = await create_user('1', 'Tom')
+    print(create_user_result)
+
+    # Получение пользователя
+    get_user_result = await get_user('1')
+    print(get_user_result)
+
+    # Удаление пользователя
+    delete_user_result = await delete_user('1')
+    print(delete_user_result)
+
+    a = await get_instrument('LKOH')
+    print(a)
 
 
-def ema(df):
-    df['ema'] = ta.trend.ema_indicator(close=df['close'], window=9)
-    return df
-
-
-def print_df(df):
-    with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-        print(df)
-
-
-# Пример использования
-ticker = 'LKOH'
-df = table(ticker)
-graf(df)
-
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())

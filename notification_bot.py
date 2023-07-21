@@ -1,22 +1,20 @@
-from datetime import timedelta, datetime
+from datetime import datetime
 
-import api
-
-import logging
 import asyncio
 import aiogram
 import hashlib
+import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Command
-from aiogram.types import InlineQuery, \
-    InputTextMessageContent, InlineQueryResultArticle, InlineQueryResultPhoto
-import sqlite3
+from aiogram.types import InlineQuery, InputTextMessageContent, InlineQueryResultPhoto, InlineQueryResultArticle
 
+import db_helper
+import ta_helper
 
-global lists
-lists = [i['ticker'] for i in api.get_all_events()]
+# Остальной код
+
 
 # Устанавливаем уровень логов на DEBUG, чтобы видеть все сообщения об ошибках
 logging.basicConfig(level=logging.DEBUG)
@@ -27,30 +25,16 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 
-# Создаем подключение к базе данных SQLite
-conn = sqlite3.connect('users.db')
-cursor = conn.cursor()
-
-# Создаем таблицу users, если она не существует
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY
-    )
-''')
-conn.commit()
-
-
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message, state: FSMContext):
     # Получаем id пользователя
     user_id = message.from_user.id
+    username = message.from_user.username
 
-    cursor.execute('SELECT id FROM users WHERE id = ?', (user_id,))
-    result = cursor.fetchone()
+    create_user_result = await db_helper.create_user(user_id, username)
 
-    if result is None:
-        cursor.execute('INSERT INTO users (id) VALUES (?)', (user_id,))
-        conn.commit()
+    if create_user_result is not None:
+        
         await message.reply(f'Пользователь с id {user_id} добавлен в базу данных.')
     else:
         await message.reply(f'Пользователь с id {user_id} уже существует в базе данных.')
@@ -60,12 +44,10 @@ async def start_command(message: types.Message, state: FSMContext):
 
 
 @dp.message_handler(Command('exclude'))
-async def exclude_user(message: types.Message, state: FSMContext):
+async def exclude_user(message: types.Message):
     user_id = message.from_user.id
 
-    # Исключаем пользователя из базы данных по username
-    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
-    conn.commit()
+    await db_helper.delete_user(user_id)
 
     await message.reply(f'Пользователь {user_id} исключен из базы данных.')
 
@@ -77,10 +59,9 @@ async def send_time():
 
         # Отправляем время всем пользователям
         try:
-            cursor.execute('SELECT id FROM users')
-            results = cursor.fetchall()
-
-            users = [row[0] for row in results]
+            results = await db_helper.get_all_users()
+            print(results)
+            users = [row['external_id'] for row in results]
 
             for user_id in users:
                 await bot.send_message(user_id, f"Текущее время: {current_time}")
@@ -93,18 +74,15 @@ async def send_time():
 
 
 @dp.message_handler(Command('send_all'))
-async def send_all_command(message: types.Message, state: FSMContext):
-    # Получаем текст сообщения для рассылки
-    print('asaaa')
+async def send_all_command(message: types.Message):
     message_text = message.get_args()
 
     # Извлекаем список пользователей из базы данных
-    cursor.execute('SELECT id FROM users')
-    users = cursor.fetchall()
+    users = await db_helper.get_all_users()
 
     # Отправляем сообщение каждому пользователю
     for user in users:
-        user_id = user[0]
+        user_id = user['external_id']
         try:
             await bot.send_message(user_id, message_text)
         except Exception as e:
@@ -114,11 +92,12 @@ async def send_all_command(message: types.Message, state: FSMContext):
 
 
 @dp.message_handler(Command('graf'))
-async def send_all_command(message: types.Message, state: FSMContext):
-    df = api.table(message.text.split()[1])
+async def send_all_command(message: types.Message):
+    instrument = await db_helper.get_instrument(message.text.split()[1])
+    df = ta_helper.table(instrument['figi'])
     print(df, message.text)
-    if df != '404':
-        api.graf(df)
+    if df is not None:
+        ta_helper.graf(df, instrument)
         with open('tsave3002.png', 'rb') as f:
             await message.answer_photo(f)
     else:
@@ -136,19 +115,20 @@ async def inline_echo(inline_query: InlineQuery):
     text = inline_query.query or 'echo'
     input_content = InputTextMessageContent(text)
     result_id: str = hashlib.md5(text.encode()).hexdigest()
+    list = await db_helper.search_instrument(text)
 
-    print(lists)
-    result = [InlineQueryResultPhoto(
-        id=f'{element}',
-        title=f'Result {element}',
+    result = [InlineQueryResultArticle(
+        id=f'{instrument["ticker"]}',
+        title=f'{instrument["name"]}',
+        input_message_content=InputTextMessageContent(message_text=f'Тикер: {instrument["ticker"]}\nФиги: {instrument["figi"]}\nИсин: {instrument["isin"]}\n{instrument["logo_url"]}'),
+        thumb_url=f'{instrument["logo_url"]}',
+        url=f'{instrument["logo_url"]}',
+        hide_url=True,
 
-        input_message_content=input_content,
-        photo_url='',
-    )
-        for element in lists if text in element]
-
+    ) for instrument in list]
+    print(result)
     # don't forget to set cache_time=1 for testing (default is 300s or 5m)
-    await bot.answer_inline_query(inline_query.id, results=result, cache_time=1)
+    await inline_query.answer(result, cache_time=1, is_personal=True)
 
 
 if __name__ == '__main__':
