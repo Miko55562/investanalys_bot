@@ -3,14 +3,12 @@ import sqlite3
 import re
 import json
 import asyncio
-import nocase
 import ta_helper
 from bs4 import BeautifulSoup
 import requests
 
 connect = sqlite3.connect('db.sqlite3', check_same_thread=False)
 cursor = connect.cursor()
-nocase.initialize()
 
 
 def inst_serializer(instrument):
