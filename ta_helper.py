@@ -61,14 +61,14 @@ def search_event(t):
     return df
 
 
-def candles(figi):
+def candles(figi, days, interval):
     with SandboxClient(creds.sandbox) as cl:
         print(cl)
         r = cl.market_data.get_candles(
             figi=figi,
-            from_=datetime.utcnow() - timedelta(days=120),
+            from_=datetime.utcnow() - timedelta(days=days),
             to=datetime.utcnow(),
-            interval=CandleInterval.CANDLE_INTERVAL_DAY # см. utils.get_all_candles
+            interval=interval
         )
     return r
 
@@ -85,8 +85,8 @@ def create_df(candles):
     return df
 
 
-def table(figi):
-    df = create_df(candles(figi).candles)
+def table(figi, days=120, interval=CandleInterval.CANDLE_INTERVAL_DAY):
+    df = create_df(candles(figi, days, interval).candles)
     print(df)
     df = ema(df)
     df = macd_12_26_9(df)

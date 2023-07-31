@@ -1,25 +1,25 @@
 from datetime import datetime
-
 import asyncio
 import aiogram
-import hashlib
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Command
-from aiogram.types import InlineQuery, InputTextMessageContent, InlineQueryResultPhoto, InlineQueryResultArticle
+from aiogram.types import InlineQuery, InputTextMessageContent, InlineQueryResultArticle
+from aiogram.dispatcher.filters.state import State, StatesGroup
 
 import db_helper
 import ta_helper
 
-# Остальной код
+
+class States(StatesGroup):
+    WAITING_FOR_TICKER = State()
 
 
-# Устанавливаем уровень логов на DEBUG, чтобы видеть все сообщения об ошибках
 logging.basicConfig(level=logging.DEBUG)
 
-# Инициализируем бота и хранилище состояний
+
 bot = Bot(token='6056598728:AAETWO9MCGyy3mg6Iq7lQ-WNrqgLaLggeDM')
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
@@ -93,18 +93,33 @@ async def send_all_command(message: types.Message):
 
 @dp.message_handler(Command('graf'))
 async def send_all_command(message: types.Message):
-    instrument = await db_helper.get_instrument(message.text.split()[1])
-    df = ta_helper.table(instrument['figi'])
-    print(df, message.text)
-    if df is not None:
-        ta_helper.graf(df, instrument)
-        with open('tsave3002.png', 'rb') as f:
-            await message.answer_photo(f)
+    await message.reply("Отправь мне тикер бумаги которую вы хотите получить для этого "
+                        "воспользуйтесь поиском с помощью @TradingBotification_bot ")
+    await States.WAITING_FOR_TICKER.set()
+
+
+@dp.message_handler(state=States.WAITING_FOR_TICKER)
+async def process_name(message: types.Message, state: FSMContext):
+    print(message.text.strip().split())
+    instrument = await db_helper.get_instrument(message.text.strip().split()[0].upper())
+    if instrument is not False:
+        await message.answer_photo(instrument['logo_url'], f"{instrument['name']}\n\nTicker: {instrument['ticker']}"
+                                                           f"\nISIN: {instrument['isin']}\nFIGI: {instrument['figi']}"
+                                                           f"\n\n{instrument['info']}")
+        try:
+            df = ta_helper.table(instrument['figi'])
+            print(df, message.text)
+            ta_helper.graf(df, instrument)
+            with open('tsave3002.png', 'rb') as f:
+                await message.answer_photo(f)
+            await state.finish()
+        except:
+            await message.reply('Извините не можем постраить график этой бумаги (')
     else:
-        await message.reply('404')
+        await message.reply("Неверное имя инструмента")
 
 
-@dp.inline_handler()
+@dp.inline_handler(state=States.WAITING_FOR_TICKER)
 async def inline_echo(inline_query: InlineQuery):
     # id affects both preview and content,
     # so it has to be unique for each result
@@ -113,23 +128,24 @@ async def inline_echo(inline_query: InlineQuery):
     # but for example i'll generate it based on text because I know, that
     # only text will be passed in this example
     text = inline_query.query or 'echo'
-    input_content = InputTextMessageContent(text)
-    result_id: str = hashlib.md5(text.encode()).hexdigest()
-    list = await db_helper.search_instrument(text)
-
+    # input_content = InputTextMessageContent(text)
+    # result_id: str = hashlib.md5(text.encode()).hexdigest()
+    response = await db_helper.search_instrument(text)
+    print(response)
     result = [InlineQueryResultArticle(
         id=f'{instrument["ticker"]}',
         title=f'{instrument["name"]}',
-        input_message_content=InputTextMessageContent(message_text=f'Тикер: {instrument["ticker"]}\nФиги: {instrument["figi"]}\nИсин: {instrument["isin"]}\n{instrument["logo_url"]}'),
+        input_message_content=InputTextMessageContent(message_text=f'{instrument["ticker"]}\nФиги: '
+                                                                   f'{instrument["figi"]}\nИсин: {instrument["isin"]}'),
         thumb_url=f'{instrument["logo_url"]}',
         url=f'{instrument["logo_url"]}',
         hide_url=True,
 
-    ) for instrument in list]
-    print(result)
+    ) for instrument in response]
+
     # don't forget to set cache_time=1 for testing (default is 300s or 5m)
     await inline_query.answer(result, cache_time=1, is_personal=True)
-
+dp.register_inline_handler(inline_echo)
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
