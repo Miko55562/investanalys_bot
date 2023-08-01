@@ -29,11 +29,20 @@ async def get_all_users():
     return users
 
 
-async def create_user(external_id, username):
-    cursor.execute(f"INSERT INTO bot_users VALUES (:name, :external_id);",
-                   {'name': username, 'external_id': external_id})
-    connect.commit()
-    return True
+async def create_user(external_id, name):
+    cursor.execute("SELECT * FROM bot_users WHERE external_id=?", (external_id,))
+    existing_user = cursor.fetchone()
+
+    if existing_user:
+        # Пользователь с таким external_id уже существует, обновляем его имя
+        cursor.execute("UPDATE bot_users SET name=? WHERE external_id=?", (name, external_id))
+        connect.commit()
+        return None
+    else:
+        # Пользователя с таким external_id еще нет, создаем новую запись
+        cursor.execute("INSERT INTO bot_users (name, external_id) VALUES (?, ?)", (name, external_id))
+        connect.commit()
+        return True
 
 
 async def delete_user(external_id):

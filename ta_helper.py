@@ -155,19 +155,3 @@ def ema(df):
 def print_df(df):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
         print(df)
-
-
-def get_logo(ticker, e_type, size=640):
-    if e_type == 'shares':
-        e_type = 'stocks'
-    response = requests.get(f'https://www.tinkoff.ru/invest/{e_type}/{ticker}/')
-    soup = BeautifulSoup(response.content, 'html.parser')
-    script = soup.find('script', attrs={'id': '__TRAMVAI_STATE__'})
-    try:
-        if script is not None:
-            json_objects = json.loads('[' + script.string + ']')
-            print(f'https://invest-brands.cdn-tinkoff.ru/' + str(json_objects[0]['stores']['investBrand']
-                                                                 [f'{ticker}']['logoName'])[:-4] + f'x{size}.png')
-    except:
-        return 'except'
-
